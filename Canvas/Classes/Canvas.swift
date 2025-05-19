@@ -5,7 +5,8 @@
 //  Created by Adeola Uthman on 10/7/18.
 //
 
-import Foundation
+import UIKit
+import CoreImage
 
 /** An area of the screen that allows drawing. */
 public class Canvas: UIView {
@@ -17,6 +18,12 @@ public class Canvas: UIView {
      ************************/
     
     // -- PRIVATE VARS
+    
+    /** The touch color. */
+    internal var isSavedImage: Bool = false
+    
+    /** The touch color. */
+    internal var tileColor: CGColor = UIColor.clear.cgColor
     
     /** The touch points. */
     internal var currentPoint: CGPoint = CGPoint()
@@ -323,15 +330,7 @@ public class Canvas: UIView {
         self.delegate?.didPasteNodes(on: self, on: cl, nodes: _copiedNodes)
     }
     
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
     
     
     /************************
@@ -343,21 +342,23 @@ public class Canvas: UIView {
     public override func draw(_ rect: CGRect) {
         // 1.) Clear all sublayers.
         layer.sublayers = []
+        guard let context = UIGraphicsGetCurrentContext() else { return }
         
         // 2.) Go through each layer and render it using either raster or vector graphics.
         for i in (0..<self._canvasLayers.count).reversed() {
             let layer = self._canvasLayers[i]
             if layer.isVisible == false { continue }
-            
+
             if layer.type == .raster {
-                drawRaster(layer: layer, rect)
+                drawTiledBrush(layer: layer, in: context)
+                //drawRaster(layer: layer, rect)
             } else {
                 drawVector(layer: layer, rect)
             }
         }
         
         // 2.5.) If there are node that are selected, draw the selection box.
-        if let currLayer = self.currentLayer {
+        /* if let currLayer = self.currentLayer {
             guard let context = UIGraphicsGetCurrentContext() else { return }
             for node in currLayer.selectedNodes {
                 let path = build(from: node.points, using: node.instructions, tool: node.type)
@@ -373,9 +374,11 @@ public class Canvas: UIView {
                 context.setLineDash(phase: 0, lengths: [10, 10])
                 context.stroke(path.boundingBox)
             }
-        }
+        }*/
         
         // 3.) Draw the temporary drawing.
+        tileColor = UIColor(patternImage: currentBrush.colored ?? UIImage()).cgColor
+
         guard let next = nextNode else { return }
         guard let context = UIGraphicsGetCurrentContext() else { return }
         if _currentTool == .selection {
@@ -383,7 +386,7 @@ public class Canvas: UIView {
             context.addPath(path)
             context.setLineCap(.butt)
             context.setLineJoin(.miter)
-            context.setStrokeColor(UIColor.black.cgColor)
+            context.setStrokeColor(tileColor)
             context.setMiterLimit(1)
             context.setAlpha(1)
             context.setLineWidth(1)
@@ -396,45 +399,182 @@ public class Canvas: UIView {
             context.setLineCap(self._currentBrush.shape)
             context.setLineJoin(self._currentBrush.joinStyle)
             context.setLineWidth(self._currentBrush.thickness)
-            context.setStrokeColor(self.currentBrush.strokeColor.cgColor)
+            context.setStrokeColor(tileColor)
             context.setMiterLimit(self._currentBrush.miter)
             context.setAlpha(self._currentBrush.opacity)
             context.setBlendMode(.normal)
             context.strokePath()
         }
     }
+
+    
+    private func drawTiledBrush(layer: CanvasLayer, in context: CGContext) {
+        for node in layer.drawings {
+            
+            //guard let colored = node.brush.colored else { continue }
+            // 🎨 Цвет кисти (как паттерн)
+            if !node.brush.isEraser { tileColor = UIColor(patternImage: (node.brush.colored ?? UIImage())!).cgColor }
+            
+            if isSavedImage {
+                if let image = node.image {
+                    guard let path = node.points.first, path.count >= 2 else { return }
+
+                    let origin = path[0]
+                    let bottomRight = path.count > 2 ? path[2] : path[1]
+
+                    let width = bottomRight.x - origin.x
+                    let height = bottomRight.y - origin.y
+
+                    let frame = CGRect(
+                        x: origin.x,
+                        y: origin.y,
+                        width: abs(width),
+                        height: abs(height)
+                    )
+
+                    if let cgImage = image.cgImage {
+                        context.saveGState()
+                        context.translateBy(x: 0, y: frame.origin.y * 2 + frame.size.height)
+                        context.scaleBy(x: 1.0, y: -1.0)
+                        context.setAlpha(node.brush.opacity)
+                        context.draw(cgImage, in: frame)
+
+                        context.restoreGState()
+                    }
+                }
+                //return
+            }
+
+            for pointArray in node.points {
+                guard pointArray.count > 1 else { continue }
+
+                let path = CGMutablePath()
+                path.move(to: pointArray[0])
+                for point in pointArray.dropFirst() {
+                    path.addLine(to: point)
+                }
+
+                context.saveGState()
+                context.addPath(path)
+                context.setLineWidth(node.brush.thickness)
+                context.setLineCap(.round)
+                context.setLineJoin(.round)
+
+                if node.brush.isEraser {
+                    context.setBlendMode(.clear)
+                    context.setAlpha(1.0)
+                } else {
+                    context.setStrokeColor(tileColor)
+                    context.setAlpha(node.brush.opacity)
+                    context.setBlendMode(.normal)
+                }
+
+                context.strokePath()
+                context.restoreGState()
+            }
+        }
+    }
     
     private func drawRaster(layer: CanvasLayer, _ rect: CGRect) {
-        guard let context = UIGraphicsGetCurrentContext() else { return }
         
-        // Create a CGContext to draw all of the lines on that layer.
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+
         for node in layer.drawings {
-            // Draw using the context.
-            let path = build(from: node.points, using: node.instructions, tool: node.type)
             
-            context.addPath(path)
-            context.setLineCap(node.brush.shape)
-            context.setLineJoin(node.brush.joinStyle)
-            context.setLineWidth(node.brush.thickness)
-            context.setMiterLimit(node.brush.miter)
-            context.setAlpha(node.brush.opacity)
-            context.setBlendMode(.normal)
+            if let image = node.image {
+                guard let path = node.points.first, path.count >= 2 else { continue }
+
+                let origin = path[0]
+                let bottomRight = path.count > 2 ? path[2] : path[1]
+
+                let width = bottomRight.x - origin.x
+                let height = bottomRight.y - origin.y
+
+                let frame = CGRect(x: origin.x,
+                                   y: origin.y,
+                                   width: abs(width),
+                                   height: abs(height))
+
+                if let cgImage = image.cgImage {
+                    context.saveGState()
+                    context.setAlpha(node.brush.opacity)
+                    context.draw(cgImage, in: frame)
+                    context.restoreGState()
+                }
+
+                continue
+            }
             
-            context.setFillColor(node.brush.fillColor?.cgColor ?? UIColor.clear.cgColor)
-            context.setStrokeColor(node.brush.strokeColor.cgColor)
-            context.drawPath(using: CGPathDrawingMode.eoFillStroke)
+            guard let cgImage = node.brush.colored?.cgImage else { continue }
             
-//            context.stroke(path.boundingBox)
+            let thickness = node.brush.thickness
+            //let alpha = node.brush.opacity
+            //let spacing = thickness //* 0.3 // 20–40% перекрытия
+            
+            let overlapRatio: CGFloat = 0.3
+            let spacing = thickness * (1.0 - overlapRatio)
+            let alpha = node.brush.opacity * min(1.0, 1.0 / (1.0 - overlapRatio))
+    
+            for strokePoints in node.points {
+                guard strokePoints.count > 1 else { continue }
+                
+                var lastPoint = strokePoints[0]
+                
+                for currentPoint in strokePoints.dropFirst() {
+                    let dx = currentPoint.x - lastPoint.x
+                    let dy = currentPoint.y - lastPoint.y
+                    let distance = hypot(dx, dy)
+                    let steps = max(Int(distance / spacing), 1)
+                    
+                    let angle = atan2(dy, dx)
+                    
+                    for step in 0..<steps {
+                        let t = CGFloat(step) / CGFloat(steps)
+                        let x = lastPoint.x + dx * t
+                        let y = lastPoint.y + dy * t
+                        let center = CGPoint(x: x, y: y)
+                        
+                        let drawRect = CGRect(
+                            x: center.x - thickness / 2,
+                            y: center.y - thickness / 2,
+                            width: thickness,
+                            height: thickness
+                        )
+                        
+                        context.saveGState()
+                        context.translateBy(x: center.x, y: center.y)
+                        context.rotate(by: angle)
+                        context.translateBy(x: -center.x, y: -center.y)
+                        context.setAlpha(alpha)
+                        context.draw(cgImage, in: drawRect)
+                        context.restoreGState()
+                    }
+                    
+                    lastPoint = currentPoint
+                }
+            }
         }
+    }
+    
+    private func renderImage() {
+
     }
     
     private func drawVector(layer: CanvasLayer, _ rect: CGRect) {
         for node in layer.drawings {
             let path = build(from: node.points, using: node.instructions, tool: node.type)
             let shapeLayer = CAShapeLayer()
+            
+            if let texture = node.brush.texture?.cgImage {
+                shapeLayer.fillColor = UIColor.clear.cgColor
+                shapeLayer.strokeColor = nil
+                shapeLayer.contents = texture
+                shapeLayer.contentsGravity = .resizeAspectFill
+            } else {
+                shapeLayer.strokeColor = node.brush.strokeColor.cgColor
+            }
             shapeLayer.bounds = path.boundingBox
             shapeLayer.path = path
-//            shapeLayer.backgroundColor = UIColor.orange.cgColor
             shapeLayer.strokeColor = node.brush.strokeColor.cgColor
             shapeLayer.fillRule = CAShapeLayerFillRule.evenOdd
             shapeLayer.fillMode = CAMediaTimingFillMode.both
@@ -470,10 +610,27 @@ public class Canvas: UIView {
             nPos.y += path.boundingBox.height / 2
             shapeLayer.position = nPos
             
-//            self.layer.addSublayer(shapeLayer)
             let insertIndex = self._currentCanvasLayer == 0 ? 0 : self._currentCanvasLayer
             self.layer.insertSublayer(shapeLayer, at: UInt32(insertIndex))
         }
+    }
+    
+    /// Добавляет изображение на текущий слой канваса.
+    public func drawImage(_ image: UIImage, in frame: CGRect) {
+        isSavedImage = true
+        guard let layer = currentLayer else { return }
+
+        let node = Node(type: .image)
+        node.points = [[
+            CGPoint(x: 0, y: 0),
+            CGPoint(x: image.size.width, y: 0),
+            CGPoint(x: image.size.width, y: image.size.height),
+            CGPoint(x: 0, y: image.size.height)
+        ]]
+        node.image = image
+        
+        layer.drawings.append(node)
+        setNeedsDisplay()
     }
     
 }

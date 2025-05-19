@@ -5,7 +5,7 @@
 //  Created by Adeola Uthman on 10/8/18.
 //
 
-import Foundation
+import UIKit
 
 /** A Brush defines the styling for how things should be drawn on the canvas. */
 public struct Brush: Codable {
@@ -47,7 +47,22 @@ public struct Brush: Codable {
     /** The line join style. */
     public var joinStyle: CGLineJoin
     
+    /** The texture image of the brush, if any. */
+    public var texture: UIImage?
     
+    /** The texture image of the brush, if any. */
+    public var colored: UIImage?
+    
+    /** The texture image of the brush, if any. */
+    public var typeImg: String?
+    
+    /** The texture image of the brush, if any. */
+    public var isEraser: Bool = false
+
+    /** The size of the texture image, if applicable. */
+    public var textureSize: CGSize?
+    
+    var userData: [String: Any] = [:]
     
     
     /** A default Brush to use. */
@@ -75,6 +90,7 @@ public struct Brush: Codable {
      ************************/
     
     public init(from decoder: Decoder) throws {
+        
         let container = try? decoder.container(keyedBy: BrushCodingKeys.self)
         thickness = try container?.decodeIfPresent(CGFloat.self, forKey: BrushCodingKeys.thickness) ?? 5
         opacity = try container?.decodeIfPresent(CGFloat.self, forKey: BrushCodingKeys.opacity) ?? 1
@@ -88,6 +104,12 @@ public struct Brush: Codable {
         strokeColor = UIColor(red: sc[0]/255, green: sc[1]/255, blue: sc[2]/255, alpha: sc[3])
         if fc != nil { fillColor = UIColor(red: fc![0]/255, green: fc![1]/255, blue: fc![2]/255, alpha: fc![3]) }
         else { fillColor = nil }
+        
+        if let textureData = try container?.decodeIfPresent(Data.self, forKey: .textureData),
+           let image = UIImage(data: textureData) {
+            self.texture = image
+            self.textureSize = try container?.decodeIfPresent(CGSize.self, forKey: .textureSize)
+        }
     }
     
     /** Creates a basic Brush that is colored black, has a thickness of 2, and a round line cap. */
@@ -99,6 +121,18 @@ public struct Brush: Codable {
         miter = 1
         shape = CGLineCap.round
         joinStyle = CGLineJoin.round
+    }
+    
+    public init(texture: UIImage, size: CGSize) {
+        self.strokeColor = UIColor.black
+        self.fillColor = nil
+        self.thickness = 2
+        self.opacity = 1
+        self.miter = 1
+        self.shape = CGLineCap.round
+        self.joinStyle = CGLineJoin.round
+        self.texture = texture
+        self.textureSize = size
     }
     
     
@@ -119,6 +153,11 @@ public struct Brush: Codable {
         try container.encode(miter, forKey: BrushCodingKeys.miter)
         try container.encode(shape.rawValue, forKey: BrushCodingKeys.shape)
         try container.encode(joinStyle.rawValue, forKey: BrushCodingKeys.join)
+        if let texture = texture,
+           let data = texture.pngData() {
+            try container.encode(data, forKey: .textureData)
+            try container.encode(textureSize, forKey: .textureSize)
+        }
     }
     
 }
